@@ -626,44 +626,90 @@ local function urlencode(s)
     return s
 end
 
--- returns title, year, is_tv (guessed from the filename)
+-- returns title, year, is_tv, ep_hint (episode number parsed from the
+-- filename when it used "Show - 01" / "Show E02" style naming)
 local function parse_title_for_search(filename)
     local base = filename:gsub("%.[%w]+$", "")  -- strip extension
-
-    local is_tv = false
-    local se, ep = split_season_episode(base)
-    if se and ep then is_tv = true end
-
-    local year = string.match(base, "(%d%d%d%d)")
-    if year then
-        local y = tonumber(year)
-        if not y or y < 1900 or y > 2100 then year = nil end
-    end
 
     local t = base
     t = t:gsub("%[[^%]]*%]", " ")               -- [group] tags
     t = t:gsub("[._]", " ")                     -- separators
-    t = t:gsub("[Ss]%d+[Ee]%d+", " ")           -- S01E02
-    t = t:gsub("%d+[xX]%d+", " ")               -- 1x02
-    t = t:gsub("%s%-%s%d+", " ")                -- " - 02" episode-only
-    if year then t = t:gsub(year, " ") end
-    t = t:gsub("%f[%w][%w]+%-[%w]+%f[%W]$", "") -- trailing codec-GROUP
-    t = t:gsub("%-", " ")                       -- any remaining dashes
-    -- drop noise tokens (case-insensitive) and stray numbers
-    local noise = { ["1080p"]=true, ["720p"]=true, ["2160p"]=true, ["480p"]=true,
-        ["4k"]=true, bluray=true, webdl=true, webrip=true, hdtv=true,
-        x264=true, x265=true, hevc=true, h264=true, h265=true, aac=true,
-        dts=true, ac3=true, ["10bit"]=true, hdr=true, dv=true, truehd=true,
-        remux=true, ["5.1"]=true, ["7.1"]=true }
-    local out = {}
+    t = t:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+
+    -- find the earliest "metadata" cut point: the title ends there
+    local cut_pos = nil
+    local is_tv = false
+    local ep_hint = nil
+
+    local function consider(pos, tv, ep)
+        if pos and (cut_pos == nil or pos < cut_pos) then
+            cut_pos = pos
+            if tv then is_tv = true end
+            if ep then ep_hint = ep end
+        end
+    end
+
+    -- TV markers (highest priority)
+    local i = t:find("[Ss]%d+[Ee]%d+")
+    consider(i, true)
+    i = t:find("%d+[xX]%d+")
+    consider(i, true)
+    local i2, _, e2 = t:find("%s%-%s(%d+)")     -- "Show - 01"
+    consider(i2, true, e2)
+    i2, _, e2 = t:find("%s[Ee](%d+)")            -- "Show E02"
+    consider(i2, true, e2)
+
+    -- year: the last plausible 4-digit group (title digits come first,
+    -- the release year comes last, before the technical suffix)
+    local year, year_pos
+    for p, y in t:gmatch("()(%d%d%d%d)") do
+        local yv = tonumber(y)
+        if yv and yv >= 1900 and yv <= 2100 then
+            year, year_pos = y, p
+        end
+    end
+    if year_pos then
+        local before = t:sub(1, year_pos - 1):gsub("%s+", "")
+        if before == "" then
+            year = nil  -- numeric title ("1917.1080p"): digits are the title
+        elseif year_pos > 1 then
+            consider(year_pos, false)
+        end
+    end
+
+    -- first technical marker (resolution / source / codec)
+    local tl = t:lower()
+    local tech = { "1080p", "720p", "2160p", "480p", "4k", "web%-dl",
+        "webrip", "bluray", "hdtv", "x264", "x265", "hevc", "h264", "h265",
+        "aac", "ac3", "dts" }
+    for _, pat in ipairs(tech) do
+        local ti = tl:find(pat)
+        if ti then
+            consider(ti, false)
+            break  -- only the first marker matters
+        end
+    end
+
+    if cut_pos then
+        t = t:sub(1, cut_pos - 1)
+    end
+
+    -- clean leftovers; keep pure-digit words ("1917") as the title
+    -- only when nothing else survived the cut
+    local out, digit_out = {}, {}
     for w in t:gmatch("%S+") do
         local wl = w:lower():gsub("[^%w%.]", "")
-        if not noise[wl] and not wl:match("^%d+$") then
+        if wl ~= "" and not wl:match("^%d+$") then
             out[#out + 1] = w
+        else
+            digit_out[#digit_out + 1] = w
         end
     end
     t = table.concat(out, " ")
-    return t, year, is_tv
+    if t == "" then
+        t = table.concat(digit_out, " ")
+    end
+    return t, year, is_tv, ep_hint
 end
 
 -- async TMDB search; calls cb(tmdb_id or nil)
@@ -712,7 +758,7 @@ local function auto_detect(file_key, filename)
         end
         return
     end
-    local title, year, is_tv = parse_title_for_search(filename)
+    local title, year, is_tv, ep_hint = parse_title_for_search(filename)
     if not title or title == "" then
         mp.osd_message("TheIntroDB: could not parse a title from the filename", 3)
         return
@@ -727,9 +773,14 @@ local function auto_detect(file_key, filename)
         tidb.tmdb_cache[file_key] = id or ""
         if id then
             tidb.tmdb_id = tostring(id)
+            -- TV with an episode-only filename ("Show - 01"): assume season 1
+            if is_tv and (not tidb.season or not tidb.episode) and ep_hint then
+                tidb.season = tidb.season or "1"
+                tidb.episode = tidb.episode or ep_hint
+            end
             if is_tv and (not tidb.season or not tidb.episode) then
                 mp.osd_message(
-                    string.format("TheIntroDB: found TMDB %d but no SxxEyy in the filename", id), 3)
+                    string.format("TheIntroDB: found TMDB %d but no season/episode in the filename", id), 3)
                 return
             end
             if o.show_osd == "yes" then

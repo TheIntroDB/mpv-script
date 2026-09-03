@@ -1,0 +1,50 @@
+# TheIntroDB mpv script configuration
+# Copy this file to script-opts/theintrodb.conf and edit.
+# Option values can also be passed on the command line:
+#   mpv --script-opts=theintrodb-tmdb_id=12345 video.mkv
+
+# API base URL
+#api_url=https://api.theintrodb.org/v3/media
+
+# Optional API key (Bearer). Without it only accepted submissions are
+# returned; with it your own pending+accepted submissions are included.
+#api_key=
+
+# TMDB read API key used for automatic media detection from the filename.
+# The default below is a public read-only key (safe to embed).
+#tmdb_api_key=eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI1NzlkZWYyZDY5ZWFlNDk4ZjJiOTI4MTgyNDdjM2ViMCIsInN1YiI6IjY2MjdmMGJlNjJmMzM1MDE0YmQ4NTFmMiIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.h3KpPvkiaz8uNz1bntAKqsPrxG_4UUWaY3kYME6N6m8
+
+# When no tmdb_id/imdb_id is given (filename or options), search TMDB using
+# the cleaned-up filename to find the media automatically.
+#auto_detect=yes
+
+# Manual identification overrides (empty = try to parse from filename)
+#tmdb_id=
+#imdb_id=
+#season=
+#episode=
+#duration_ms=
+
+# Auto-skip intro & recap segments as soon as playback enters them
+#auto_skip=no
+#auto_skip_types=intro,recap
+
+# Key bindings (empty = not bound)
+# Note: defaults avoid conflicts with flower-mpv-config / mpv defaults
+#key_skip_intro=Alt+i
+#key_skip_recap=Alt+r
+#key_skip_credits=Alt+c
+#key_skip_preview=
+#key_skip_next=n
+#key_toggle_ui=Ctrl+i
+#key_toggle_auto_skip=Alt+a
+
+# Clickable on-screen button bar (toggle with key_toggle_ui)
+#mouse_buttons=yes
+
+# OSD notifications
+#show_osd=yes
+
+# Failed fetch retry: base seconds, doubled per attempt
+#retry_secs=5
+#max_retries=4

@@ -53,6 +53,7 @@ For streams or files with no id in the name, pass it explicitly:
 
 ```sh
 mpv --script-opts=theintrodb-tmdb_id=12345 'https://.../video.mkv'
+mpv --script-opts=theintrodb-tmdb_id=16085,theintrodb-season=1,theintrodb-episode=4 "video.mp4"
 ```
 
 ## Key bindings

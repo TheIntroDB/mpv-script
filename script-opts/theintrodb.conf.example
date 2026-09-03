@@ -2,6 +2,7 @@
 # Copy this file to script-opts/theintrodb.conf and edit.
 # Option values can also be passed on the command line:
 #   mpv --script-opts=theintrodb-tmdb_id=12345 video.mkv
+#   mpv --script-opts=theintrodb-tmdb_id=16085,theintrodb-season=1,theintrodb-episode=4 "video.mp4"
 
 # API base URL
 #api_url=https://api.theintrodb.org/v3/media
@@ -19,6 +20,7 @@
 #auto_detect=yes
 
 # Manual identification overrides (empty = try to parse from filename)
+# changing this will override identification globally, you must change it per media (recommended to leave untouched)
 #tmdb_id=
 #imdb_id=
 #season=

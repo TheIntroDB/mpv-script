@@ -192,9 +192,9 @@ local function on_fetch_result(status, stdout, file_key, tmdb_id, imdb_id)
         schedule_retry(file_key, tmdb_id, imdb_id)
         return
     end
-    -- parse "HTTP<code>BODY" response
-    local http_code = tonumber(string.match(stdout or "", "^HTTP(%d+)")) or 0
-    local body = string.match(stdout or "", "^HTTP%d+(.*)$") or ""
+    -- parse "\n<code>" trailer appended by curl -w (code comes AFTER the body)
+    local http_code = tonumber(string.match(stdout or "", "\n(%d+)$")) or 0
+    local body = string.gsub(stdout or "", "\n%d+$", "")
     if http_code == 429 then
         tidb.last_fetch_error = "rate limited (429)"
         schedule_retry(file_key, tmdb_id, imdb_id)
@@ -264,7 +264,7 @@ fetch_media = function(file_key, tmdb_id, imdb_id)
     end
     local url = api_url(tmdb_id, imdb_id, tidb.season, tidb.episode, o.duration_ms)
     local args = {
-        "curl", "-s", "--max-time", "10", "-w", "HTTP%{http_code}",
+        "curl", "-s", "--max-time", "10", "-w", "\n%{http_code}",
     }
     if o.api_key ~= "" then
         args[#args + 1] = "-H"

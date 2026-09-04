@@ -82,21 +82,6 @@ segments. It never fights you: it only skips when playback is moving
 forward, and won't skip after a recent manual seek. Credits and previews are
 never auto-skipped — they only skip on demand.
 
-## API & rate limits
-
-Data comes from `https://api.theintrodb.org/v3/media`. Unauthenticated
-requests are limited to **30 requests / 10 seconds** and **500 requests /
-day** per IP, so the script:
-
-- fetches each file's data at most once per session (in-memory cache),
-- retries transient failures (429 / network) with exponential backoff
-  (5s → 10s → 20s → 40s), and
-- only requests when an id could be identified.
-
-An optional `api_key` (see the config) is sent as a `Bearer` token; this
-also includes your own pending submissions in the results. If you don't have
-a key yet, get one from the TheIntroDB website / Discord.
-
 ## Development
 
 ```sh

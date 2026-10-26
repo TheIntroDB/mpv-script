@@ -1,5 +1,5 @@
 -- theintrodb.lua - Skip intros, recaps, credits & previews using TheIntroDB
--- version: v1.0.0
+-- version: v2.0.0
 --
 -- Fetches segment timestamps for the currently playing movie / TV episode from
 -- the TheIntroDB API (https://api.theintrodb.org/v4/media) and provides:

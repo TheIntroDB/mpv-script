@@ -2,7 +2,7 @@
 -- version: v1.0.0
 --
 -- Fetches segment timestamps for the currently playing movie / TV episode from
--- the TheIntroDB API (https://api.theintrodb.org/v3/media) and provides:
+-- the TheIntroDB API (https://api.theintrodb.org/v4/media) and provides:
 --   * keybindings to skip each segment type
 --   * a clickable on-screen button bar (toggle with theintrodb-toggle-ui)
 --   * optional auto-skip of intros & recaps (toggle with theintrodb-auto-skip)
@@ -24,7 +24,7 @@ local utils = require "mp.utils"
 -- defaults (overridable via script-opts/theintrodb.conf)
 -- ---------------------------------------------------------------------------
 local o = {
-    api_url = "https://api.theintrodb.org/v3/media",
+    api_url = "https://api.theintrodb.org/v4/media",
     api_key = "",            -- optional Bearer key; include to see your pending submissions
     tmdb_api_key = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI1NzlkZWYyZDY5ZWFlNDk4ZjJiOTI4MTgyNDdjM2ViMCIsInN1YiI6IjY2MjdmMGJlNjJmMzM1MDE0YmQ4NTFmMiIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.h3KpPvkiaz8uNz1bntAKqsPrxG_4UUWaY3kYME6N6m8",
     auto_detect = "yes",     -- when no id is given, look the media up on TMDB from the filename

@@ -88,6 +88,9 @@ never auto-skipped — they only skip on demand.
 # syntax check
 luac -p scripts/theintrodb.lua
 
+# tests: the default endpoint, the built request, and a v4 body
+lua tests/test_v4.lua
+
 # manual test with a known movie (replace 12345 with any TMDB id)
 ffmpeg -f lavfi -i testsrc=duration=600:size=1280x720:rate=30 -f lavfi -i sine=frequency=440:duration=600 \
   -c:v libx264 -preset ultrafast -c:a aac -shortest /tmp/test-video.mkv

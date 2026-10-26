@@ -5,7 +5,7 @@
 #   mpv --script-opts=theintrodb-tmdb_id=16085,theintrodb-season=1,theintrodb-episode=4 "video.mp4"
 
 # API base URL
-#api_url=https://api.theintrodb.org/v3/media
+#api_url=https://api.theintrodb.org/v4/media
 
 # Optional API key (Bearer). Without it only accepted submissions are
 # returned; with it your own pending+accepted submissions are included.

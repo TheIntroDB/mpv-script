@@ -1,0 +1,233 @@
+-- tests/test_v4.lua - the mpv script against a stubbed mpv API.
+--
+--   lua5.1 tests/test_v4.lua        (run from the repo root; exits non-zero on failure)
+--
+-- What it pins, and why:
+--   * the default endpoint is TheIntroDB API v4. /v2 and /v3 are frozen at
+--     GET /media, so a client still pointed at them silently loses everything
+--     added since - the bug this guards against re-introducing.
+--   * the request the script builds still asks for the media the same way
+--     (id + season + episode) and now goes to /v4/media.
+--   * a v4 body parses into the same segments as before: v4 keys the response
+--     by tvdb_id and no longer echoes tmdb_id, but the segment arrays are
+--     unchanged, so the parser must not care which identity came back.
+--
+-- The harness supplies a fake `mp` plus a tiny JSON decoder, because neither
+-- exists in a plain Lua interpreter. Nothing here is loaded by mpv itself.
+
+local script_dir = arg[0]:match("^(.*)[/\\][^/\\]*$") or "."
+local root = script_dir .. "/.."
+
+local failures = 0
+local function check(cond, label, detail)
+  if cond then
+    print("ok   - " .. label)
+  else
+    failures = failures + 1
+    print("FAIL - " .. label .. (detail and ("\n       " .. tostring(detail)) or ""))
+  end
+end
+
+local function read_file(path)
+  local f = assert(io.open(path, "rb"))
+  local body = f:read("*a")
+  f:close()
+  return body
+end
+
+-- ---------------------------------------------------------------------------
+-- a JSON decoder, only as good as the fixtures below
+-- ---------------------------------------------------------------------------
+local decode_json
+
+local function skip_ws(s, i)
+  local _, j = s:find("^[ \t\r\n]*", i)
+  return j + 1
+end
+
+decode_json = function(s, i)
+  i = skip_ws(s, i)
+  local c = s:sub(i, i)
+  if c == "{" then
+    local out = {}
+    i = skip_ws(s, i + 1)
+    if s:sub(i, i) == "}" then return out, i + 1 end
+    while true do
+      local key, value
+      key, i = decode_json(s, i)
+      i = skip_ws(s, i)
+      assert(s:sub(i, i) == ":", "expected : at " .. i)
+      value, i = decode_json(s, i + 1)
+      out[key] = value
+      i = skip_ws(s, i)
+      local delim = s:sub(i, i)
+      i = i + 1
+      if delim == "}" then return out, i end
+      assert(delim == ",", "expected , or } at " .. i)
+    end
+  elseif c == "[" then
+    local out = {}
+    i = skip_ws(s, i + 1)
+    if s:sub(i, i) == "]" then return out, i + 1 end
+    while true do
+      local value
+      value, i = decode_json(s, i)
+      out[#out + 1] = value
+      i = skip_ws(s, i)
+      local delim = s:sub(i, i)
+      i = i + 1
+      if delim == "]" then return out, i end
+      assert(delim == ",", "expected , or ] at " .. i)
+    end
+  elseif c == '"' then
+    local out = {}
+    i = i + 1
+    while true do
+      local ch = s:sub(i, i)
+      if ch == '"' then return table.concat(out), i + 1 end
+      if ch == "\\" then
+        local esc = s:sub(i + 1, i + 1)
+        out[#out + 1] = ({ n = "\n", t = "\t", r = "\r" })[esc] or esc
+        i = i + 2
+      else
+        out[#out + 1] = ch
+        i = i + 1
+      end
+    end
+  elseif s:sub(i, i + 3) == "true" then
+    return true, i + 4
+  elseif s:sub(i, i + 4) == "false" then
+    return false, i + 5
+  elseif s:sub(i, i + 3) == "null" then
+    return nil, i + 4
+  else
+    local num = s:match("^-?%d+%.?%d*[eE]?[-+]?%d*", i)
+    assert(num, "unexpected character at " .. i .. ": " .. s:sub(i, i + 10))
+    return tonumber(num), i + #num
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- the fake mpv API
+-- ---------------------------------------------------------------------------
+local opts = { ["theintrodb-debug"] = "yes" }
+local props = { duration = 600, pause = false }
+local events = {}
+local requests = {}          -- every subprocess argv the script issued
+local answer = { code = 200, body = "" }
+
+local function inert_timer()
+  return { kill = function() end }
+end
+
+mp = {
+  get_opt = function(name) return opts[name] end,
+  get_property = function(name) return props[name] end,
+  get_property_number = function(name)
+    local v = props[name]
+    return v ~= nil and tonumber(v) or nil
+  end,
+  get_property_bool = function(name) return props[name] == true end,
+  get_time = function() return 0 end,
+  set_property = function(name, value) props[name] = value end,
+  commandv = function() end,
+  osd_message = function() end,
+  set_osd_ass = function() end,
+  get_osd_size = function() return 1280, 720 end,
+  add_key_binding = function() end,
+  remove_key_binding = function() end,
+  register_event = function(name, fn) events[name] = fn end,
+  add_timeout = function() return inert_timer() end,
+  add_periodic_timer = function() return inert_timer() end,
+  command_native_async = function(o, cb)
+    requests[#requests + 1] = o.args
+    cb(true, { status = 0, stdout = answer.body .. "\n" .. tostring(answer.code) })
+  end,
+  msg = { log = function() end },
+}
+
+package.preload["mp.utils"] = function()
+  return { parse_json = function(s) return select(1, decode_json(s, 1)) end }
+end
+
+-- ---------------------------------------------------------------------------
+-- the static pin: the shipped default, not any single request
+-- ---------------------------------------------------------------------------
+local script_src = read_file(root .. "/scripts/theintrodb.lua")
+local conf_src = read_file(root .. "/script-opts/theintrodb.conf.example")
+
+check(
+  script_src:find('api_url = "https://api.theintrodb.org/v4/media"', 1, true) ~= nil,
+  "the script's default api_url is the v4 /media endpoint"
+)
+check(
+  conf_src:find("#api_url=https://api.theintrodb.org/v4/media", 1, true) ~= nil,
+  "the shipped conf example documents the v4 endpoint"
+)
+for _, file in ipairs({ "/scripts/theintrodb.lua", "/script-opts/theintrodb.conf.example", "/README.md" }) do
+  check(
+    read_file(root .. file):find("api.theintrodb.org/v3", 1, true) == nil,
+    file .. " carries no v3 reference"
+  )
+end
+
+-- ---------------------------------------------------------------------------
+-- the request, and the v4 body
+-- ---------------------------------------------------------------------------
+assert(loadfile(root .. "/scripts/theintrodb.lua"))()
+
+check(events["file-loaded"] ~= nil, "the script registers a file-loaded handler")
+
+props.filename = "Some.Show.S01E02.1080p.tmdb-615.mkv"
+props.path = "/tv/" .. props.filename
+props.url = "file:///tv/" .. props.filename
+
+-- a v4 body for the same episode TheIntroDB answers for Futurama tmdb_id=615
+answer = {
+  code = 200,
+  body = '{"tvdb_id":73871,"type":"tv","season":1,"episode":2,'
+    .. '"intro":[{"start_ms":null,"end_ms":14600}],'
+    .. '"credits":[{"start_ms":1267233,"end_ms":null}]}',
+}
+
+events["file-loaded"]()
+
+check(#requests == 1, "one request was issued for the file", "got " .. #requests)
+local args = requests[1]
+local url = args and args[#args] or ""
+
+check(
+  url:match("^https://api%.theintrodb%.org/v4/media%?") ~= nil,
+  "the request goes to /v4/media",
+  url
+)
+check(url:find("tmdb_id=615", 1, true) ~= nil, "the request names the media", url)
+check(
+  url:find("season=1", 1, true) ~= nil and url:find("episode=2", 1, true) ~= nil,
+  "the request carries season and episode",
+  url
+)
+
+local state = _G.__tidb_debug()
+check(state ~= nil, "the debug hook is exposed")
+local segments = state and state.segments or {}
+
+check(#segments == 2, "the v4 body parsed into two segments", "got " .. #segments)
+check(
+  segments[1] and segments[1].kind == "intro" and segments[1].start == 0 and segments[1]["end"] == 14.6,
+  "the intro parses with a null start as 0:00 and a 14.6s end",
+  segments[1] and string.format("%s %s->%s", segments[1].kind, tostring(segments[1].start), tostring(segments[1]["end"]))
+)
+check(
+  segments[2] and segments[2].kind == "credits" and segments[2]["end"] == nil
+    and math.abs(segments[2].start - 1267.233) < 0.001,
+  "the credits segment keeps its null end (runs to the end of the media)",
+  segments[2] and string.format("%s %s->%s", segments[2].kind, tostring(segments[2].start), tostring(segments[2]["end"]))
+)
+
+print("")
+if failures > 0 then
+  print(string.format("%d check(s) failed", failures))
+  os.exit(1)
+end
+print("all checks passed")

@@ -44,7 +44,8 @@ local o = {
     key_toggle_auto_skip = "Alt+a",
     mouse_buttons = "yes",   -- clickable on-screen button bar
     show_osd = "yes",        -- OSD notifications on skip / load
-    retry_secs = "5",        -- base delay before retrying a failed fetch (doubles)
+    retry_secs = "5",        -- base delay before retrying a failed fetch (doubles;
+                             -- a 429 waits what the API asks for instead)
     max_retries = "4",
 }
 
@@ -85,6 +86,8 @@ local tidb = {
     retry_timer = nil,
     retry_count = 0,
     last_fetch_error = nil,
+    limited_until = nil,  -- epoch seconds; set while a daily 429 is in force
+    limited_targets = {}, -- media target -> epoch seconds; the per-title 429
     cache = {},           -- file_key -> media table (TheIntroDB responses)
     tmdb_cache = {},      -- file_key -> tmdb_id (auto-detect results)
     api_timer = nil,
@@ -185,6 +188,97 @@ local function api_url(tmdb_id, imdb_id, season, episode, duration_ms)
     return o.api_url .. "?" .. table.concat(params, "&")
 end
 
+-- How long a 429 wants us to wait, and which of the two it is. The rules are in
+-- TheIntroDB/.github docs/rate-limit-contract.md; this is the mpv script's
+-- implementation of them.
+local MAX_WAIT_SECONDS = 86400        -- a daily budget resets at UTC midnight
+local USAGE_WAIT_FLOOR_SECONDS = 300  -- longer than this cannot be a burst
+local DEFAULT_RETRY_WAIT_SECONDS = 60
+
+local function parse_human_seconds(value)
+    if type(value) ~= "string" then return nil end
+    local amount, unit = value:match("^(%d+%.?%d*)%s*(%a+)")
+    if not amount then return nil end
+    local n = tonumber(amount)
+    if not n then return nil end
+    unit = unit:lower()
+    -- The API writes the words in full: "10 seconds", "14.0 hours".
+    local per = (unit == "second" or unit == "seconds") and 1
+        or (unit == "minute" or unit == "minutes") and 60
+        or (unit == "hour" or unit == "hours") and 3600
+        or (unit == "day" or unit == "days") and 86400
+    if not per then return nil end
+    return n * per
+end
+
+-- Reads a 429 into { kind = "rate"|"usage", seconds = n }, or nil when the body
+-- cannot be read at all.
+--
+-- The wait comes from the body rather than the Retry-After header because this
+-- script fetches with `curl -s -w "\n%{http_code}"`, which never puts headers in
+-- stdout. The API writes the same instant to both, so retry_after_seconds is the
+-- Retry-After value; retry_after carries it in words ("14.0 hours"). Returning
+-- nil leaves the caller on its old backoff, which is what a non-JSON 429 from a
+-- proxy needs.
+local function rate_limit_from(body)
+    local ok, data = pcall(utils.parse_json, body or "")
+    if not ok or type(data) ~= "table" then return nil end
+
+    local code = data.code
+    if type(code) ~= "string" then code = nil end
+
+    local wait = tonumber(data.retry_after_seconds)
+        or parse_human_seconds(data.retry_after)
+        or DEFAULT_RETRY_WAIT_SECONDS
+    local seconds = math.floor(math.min(math.max(wait, 1), MAX_WAIT_SECONDS))
+
+    local kind
+    if code == "rate_limit_exceeded" then
+        kind = "rate"
+    elseif code == "usage_limit_exceeded"
+        or code == "specific_media_usage_limit_exceeded" then
+        kind = "usage"
+    else
+        kind = seconds > USAGE_WAIT_FLOOR_SECONDS and "usage" or "rate"
+    end
+
+    -- Only the per-title code is spent for one media target; anything else --
+    -- including a duration-only guess -- is the caller's own budget.
+    local scope = code == "specific_media_usage_limit_exceeded" and "title" or "account"
+
+    return { kind = kind, seconds = seconds, code = code, scope = scope }
+end
+
+-- The media a request is about, so a per-title hold can be scoped to it.
+local function target_key(tmdb_id, imdb_id)
+    return tostring(tmdb_id or imdb_id or "?")
+        .. ":" .. tostring(tidb.season or "")
+        .. ":" .. tostring(tidb.episode or "")
+end
+
+-- The hold in force for this media, or nil. The account's own budget outranks
+-- the per-title one, and a spent title must not stop another title.
+local function hold_for(tmdb_id, imdb_id)
+    local now = os.time()
+    if tidb.limited_until and now < tidb.limited_until then
+        return { scope = "account", seconds = tidb.limited_until - now }
+    end
+    local until_ = tidb.limited_targets[target_key(tmdb_id, imdb_id)]
+    if until_ and now < until_ then
+        return { scope = "title", seconds = until_ - now }
+    end
+    return nil
+end
+
+local function fmt_wait(seconds)
+    if seconds >= 3600 then
+        return string.format("~%.1fh", seconds / 3600)
+    elseif seconds >= 60 then
+        return string.format("~%dm", math.floor(seconds / 60))
+    end
+    return tostring(seconds) .. "s"
+end
+
 local function on_fetch_result(status, stdout, file_key, tmdb_id, imdb_id)
     if file_key ~= tidb.file_key then return end -- stale (file changed while fetching)
     tidb.retry_timer = nil
@@ -197,8 +291,31 @@ local function on_fetch_result(status, stdout, file_key, tmdb_id, imdb_id)
     local http_code = tonumber(string.match(stdout or "", "\n(%d+)$")) or 0
     local body = string.gsub(stdout or "", "\n%d+$", "")
     if http_code == 429 then
+        local limit = rate_limit_from(body)
+        if limit and limit.kind == "usage" then
+            -- A spent budget is not a transient failure. The backoff below would
+            -- spend every retry on a request that cannot succeed yet and still end
+            -- in "giving up"; say when it lifts and stop asking. A per-title limit
+            -- is held against that media only, so other titles keep working.
+            tidb.retry_count = 0
+            local until_ = os.time() + limit.seconds
+            if limit.scope == "title" then
+                tidb.limited_targets[target_key(tmdb_id, imdb_id)] = until_
+            else
+                tidb.limited_until = until_
+            end
+            local what = limit.scope == "title" and "this title's limit" or "daily limit"
+            tidb.last_fetch_error = what .. " reached"
+            log("%s reached (%s), resuming in %ds", what, tostring(limit.code), limit.seconds)
+            if o.show_osd == "yes" then
+                mp.osd_message(string.format(
+                    "TheIntroDB: %s reached, resumes in %s",
+                    what, fmt_wait(limit.seconds)), 3)
+            end
+            return
+        end
         tidb.last_fetch_error = "rate limited (429)"
-        schedule_retry(file_key, tmdb_id, imdb_id)
+        schedule_retry(file_key, tmdb_id, imdb_id, limit and limit.seconds)
         return
     end
     if http_code == 404 or http_code == 400 then
@@ -237,7 +354,7 @@ local function on_fetch_result(status, stdout, file_key, tmdb_id, imdb_id)
     end
 end
 
-schedule_retry = function(file_key, tmdb_id, imdb_id)
+schedule_retry = function(file_key, tmdb_id, imdb_id, wait_seconds)
     if file_key ~= tidb.file_key then return end
     if tidb.retry_count >= tonumber(o.max_retries) then
         tidb.last_fetch_error = nil
@@ -247,7 +364,14 @@ schedule_retry = function(file_key, tmdb_id, imdb_id)
         return
     end
     tidb.retry_count = tidb.retry_count + 1
-    local delay = tonumber(o.retry_secs) * (2 ^ (tidb.retry_count - 1))
+    local delay
+    if wait_seconds then
+        -- The API named the wait, so take it: a burst clears inside the 10s
+        -- window, which is usually sooner than the first backoff would be.
+        delay = math.floor(wait_seconds)
+    else
+        delay = tonumber(o.retry_secs) * (2 ^ (tidb.retry_count - 1))
+    end
     log("fetch failed (%s), retrying in %ds", tidb.last_fetch_error, delay)
     tidb.retry_timer = mp.add_timeout(delay, function()
         tidb.retry_timer = nil
@@ -257,6 +381,13 @@ end
 
 fetch_media = function(file_key, tmdb_id, imdb_id)
     if file_key ~= tidb.file_key then return end
+    local hold = hold_for(tmdb_id, imdb_id)
+    if hold then
+        -- Inside the wait the API named: asking again would spend another request
+        -- against a budget that is already gone and earn another 429.
+        log("skipping fetch: %s limit in force for another %ds", hold.scope, hold.seconds)
+        return
+    end
     if tidb.cache[file_key] then
         tidb.media = tidb.cache[file_key]
         tidb.loaded = true

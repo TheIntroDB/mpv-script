@@ -47,6 +47,9 @@
 # OSD notifications
 #show_osd=yes
 
-# Failed fetch retry: base seconds, doubled per attempt
+# Failed fetch retry: base seconds, doubled per attempt. A 429 is the exception
+# -- it waits the time the API names (10s for a burst, up to 14 hours for a spent
+# daily budget), and a spent budget stops the retries until the window rolls over
+# rather than burning all four on requests that cannot succeed yet.
 #retry_secs=5
 #max_retries=4

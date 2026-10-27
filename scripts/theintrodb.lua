@@ -87,6 +87,7 @@ local tidb = {
     retry_count = 0,
     last_fetch_error = nil,
     limited_until = nil,  -- epoch seconds; set while a daily 429 is in force
+    limited_targets = {}, -- media target -> epoch seconds; the per-title 429
     cache = {},           -- file_key -> media table (TheIntroDB responses)
     tmdb_cache = {},      -- file_key -> tmdb_id (auto-detect results)
     api_timer = nil,
@@ -241,7 +242,32 @@ local function rate_limit_from(body)
         kind = seconds > USAGE_WAIT_FLOOR_SECONDS and "usage" or "rate"
     end
 
-    return { kind = kind, seconds = seconds, code = code }
+    -- Only the per-title code is spent for one media target; anything else --
+    -- including a duration-only guess -- is the caller's own budget.
+    local scope = code == "specific_media_usage_limit_exceeded" and "title" or "account"
+
+    return { kind = kind, seconds = seconds, code = code, scope = scope }
+end
+
+-- The media a request is about, so a per-title hold can be scoped to it.
+local function target_key(tmdb_id, imdb_id)
+    return tostring(tmdb_id or imdb_id or "?")
+        .. ":" .. tostring(tidb.season or "")
+        .. ":" .. tostring(tidb.episode or "")
+end
+
+-- The hold in force for this media, or nil. The account's own budget outranks
+-- the per-title one, and a spent title must not stop another title.
+local function hold_for(tmdb_id, imdb_id)
+    local now = os.time()
+    if tidb.limited_until and now < tidb.limited_until then
+        return { scope = "account", seconds = tidb.limited_until - now }
+    end
+    local until_ = tidb.limited_targets[target_key(tmdb_id, imdb_id)]
+    if until_ and now < until_ then
+        return { scope = "title", seconds = until_ - now }
+    end
+    return nil
 end
 
 local function fmt_wait(seconds)
@@ -267,19 +293,24 @@ local function on_fetch_result(status, stdout, file_key, tmdb_id, imdb_id)
     if http_code == 429 then
         local limit = rate_limit_from(body)
         if limit and limit.kind == "usage" then
-            -- A spent daily budget is not a transient failure. The backoff below
-            -- would spend every retry on a request that cannot succeed yet and
-            -- still end in "giving up"; say when it lifts and stop asking. The
-            -- next file-load after that is free to fetch again.
+            -- A spent budget is not a transient failure. The backoff below would
+            -- spend every retry on a request that cannot succeed yet and still end
+            -- in "giving up"; say when it lifts and stop asking. A per-title limit
+            -- is held against that media only, so other titles keep working.
             tidb.retry_count = 0
-            tidb.limited_until = os.time() + limit.seconds
-            tidb.last_fetch_error = "daily limit reached"
-            log("usage limit reached (%s), resuming in %ds",
-                tostring(limit.code), limit.seconds)
+            local until_ = os.time() + limit.seconds
+            if limit.scope == "title" then
+                tidb.limited_targets[target_key(tmdb_id, imdb_id)] = until_
+            else
+                tidb.limited_until = until_
+            end
+            local what = limit.scope == "title" and "this title's limit" or "daily limit"
+            tidb.last_fetch_error = what .. " reached"
+            log("%s reached (%s), resuming in %ds", what, tostring(limit.code), limit.seconds)
             if o.show_osd == "yes" then
                 mp.osd_message(string.format(
-                    "TheIntroDB: daily limit reached, resumes in %s",
-                    fmt_wait(limit.seconds)), 3)
+                    "TheIntroDB: %s reached, resumes in %s",
+                    what, fmt_wait(limit.seconds)), 3)
             end
             return
         end
@@ -350,11 +381,11 @@ end
 
 fetch_media = function(file_key, tmdb_id, imdb_id)
     if file_key ~= tidb.file_key then return end
-    if tidb.limited_until and os.time() < tidb.limited_until then
+    local hold = hold_for(tmdb_id, imdb_id)
+    if hold then
         -- Inside the wait the API named: asking again would spend another request
         -- against a budget that is already gone and earn another 429.
-        log("skipping fetch: limited for another %ds",
-            tidb.limited_until - os.time())
+        log("skipping fetch: %s limit in force for another %ds", hold.scope, hold.seconds)
         return
     end
     if tidb.cache[file_key] then

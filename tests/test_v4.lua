@@ -242,6 +242,7 @@ check(
 local function scenario(code, body, filename)
   -- each case starts outside a limit, with nothing recorded
   state.limited_until = nil
+  state.limited_targets = {}
   state.retry_count = 0
   timeouts, osd, requests = {}, {}, {}
   props.filename = filename or "Show.S01E03.tmdb-615.mkv"
@@ -286,10 +287,34 @@ check(
   "a spent budget does not accumulate retries on the way to giving up"
 )
 
--- the per-title budget is the same kind of limit
+-- the per-title budget is the same kind of limit, but scoped to its title
 scenario(429, '{"code":"specific_media_usage_limit_exceeded",'
   .. '"error":"Specific media usage limit exceeded","retry_after_seconds":43200}')
 check(#timeouts == 0, "the per-title budget stops rather than retrying", delays())
+check(state.limited_until == nil, "and does not hold the whole account")
+check(next(state.limited_targets) ~= nil, "it is held against the media target")
+
+-- the episode that spent it is not asked for again...
+requests = {}
+events["file-loaded"]()
+check(
+  #requests == 0,
+  "the spent episode is not asked for again",
+  "requests: " .. #requests
+)
+
+-- ...but the next episode is, because the limit was that title's, not the account's
+answer = { code = 200, body = '{"tvdb_id":73871,"intro":[{"start_ms":1000,"end_ms":5000}]}' }
+props.filename = "Show.S01E04.tmdb-615.mkv"
+props.path = "/tv/" .. props.filename
+props.url = "file:///tv/" .. props.filename
+requests = {}
+events["file-loaded"]()
+check(
+  #requests == 1,
+  "but the next episode is still asked for",
+  "requests: " .. #requests
+)
 
 -- with no code at all, the size of the wait decides, at the 300s line
 scenario(429, '{"error":"slow down","retry_after_seconds":3600}')

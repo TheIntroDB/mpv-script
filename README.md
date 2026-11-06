@@ -1,4 +1,4 @@
-<img align="right" width="88" src="https://raw.githubusercontent.com/TheIntroDB/theintrodb-assets/main/integrations/mpv.png" alt="mpv">
+<img align="right" width="88" src="https://raw.githubusercontent.com/TheIntroDB/.github/main/integrations/mpv.png" alt="mpv">
 
 [![mpv 0.33%2B](https://img.shields.io/badge/mpv-0.33%2B-691F69?style=flat-square&logo=mpv&logoColor=4ade80&labelColor=0d0d0d)](https://mpv.io)
 [![License](https://img.shields.io/github/license/TheIntroDB/mpv-script?style=flat-square&logo=gnu&logoColor=4ade80&label=License&labelColor=0d0d0d&color=038939)](https://github.com/TheIntroDB/mpv-script/blob/main/LICENSE)

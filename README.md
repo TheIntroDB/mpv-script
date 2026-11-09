@@ -111,7 +111,7 @@ mpv --script=scripts/theintrodb.lua --script-opts=theintrodb-tmdb_id=12345 /tmp/
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**MIT License** (`MIT`) — see [LICENSE](LICENSE) for the full text. Every source file carries `SPDX-License-Identifier: MIT`.
 
 ---
 

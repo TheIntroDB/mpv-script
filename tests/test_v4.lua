@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (C) 2026 TheIntroDB
+
 -- tests/test_v4.lua - the mpv script against a stubbed mpv API.
 --
 --   lua5.1 tests/test_v4.lua        (run from the repo root; exits non-zero on failure)

@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: MIT
+-- Copyright (C) 2026 TheIntroDB
+
 -- theintrodb.lua - Skip intros, recaps, credits & previews using TheIntroDB
 -- version: v2.1.0
 --
